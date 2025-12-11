@@ -1,11 +1,17 @@
 <?php
+// pages/configuracoes.php
+// TELA DE CONFIGURAÇÕES GERAIS (COM CLIENTES IMOBILIÁRIOS)
+
+// --- CONEXÃO ---
 if (!isset($pdo)) {
     $arquivo_db = __DIR__ . '/../includes/db.php';
     if (file_exists($arquivo_db)) include $arquivo_db;
     else include __DIR__ . '/../db.php';
 }
+
 $mensagem = "";
 
+// --- LÓGICA DE CADASTRO RÁPIDO (INSERIR NOVO) ---
 if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['acao'])) {
     $acao = $_POST['acao'];
     try {
@@ -31,17 +37,28 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['acao'])) {
             $pdo->prepare("INSERT INTO compradores (nome) VALUES (?)")->execute([strtoupper($_POST['nome'])]);
             $mensagem = "✅ Comprador salvo!";
         }
+        // --- NOVO: CLIENTE IMOBILIÁRIO ---
+        elseif ($acao == 'novo_cliente_imob') {
+            $cpf = $_POST['cpf'] ?? null;
+            $pdo->prepare("INSERT INTO clientes_imob (nome, cpf) VALUES (?, ?)")->execute([strtoupper($_POST['nome']), $cpf]);
+            $mensagem = "✅ Cliente salvo!";
+        }
     } catch (Exception $e) { $mensagem = "❌ Erro: " . $e->getMessage(); }
 }
+
+// MENSAGEM DE EDIÇÃO
 if(isset($_GET['msg']) && $_GET['msg']=='editado') {
     $mensagem = "✏️ Registro atualizado com sucesso!";
 }
 
+// --- CONSULTAS ---
 $empresas = $pdo->query("SELECT * FROM empresas ORDER BY nome")->fetchAll();
 $obras = $pdo->query("SELECT o.*, e.nome as nome_empresa FROM obras o LEFT JOIN empresas e ON o.empresa_id = e.id ORDER BY o.nome")->fetchAll();
 $fornecedores = $pdo->query("SELECT * FROM fornecedores ORDER BY nome LIMIT 1000")->fetchAll();
 $materiais = $pdo->query("SELECT * FROM materiais ORDER BY nome LIMIT 1000")->fetchAll();
 $compradores = $pdo->query("SELECT * FROM compradores ORDER BY nome")->fetchAll();
+// NOVO
+$clientes_imob = $pdo->query("SELECT * FROM clientes_imob ORDER BY nome")->fetchAll();
 ?>
 
 <link rel="stylesheet" href="https://cdn.datatables.net/1.13.4/css/dataTables.bootstrap5.min.css">
@@ -54,7 +71,7 @@ $compradores = $pdo->query("SELECT * FROM compradores ORDER BY nome")->fetchAll(
 
 <div class="container-fluid">
     <div class="d-flex justify-content-between align-items-center mb-4">
-        <h3 class="text-primary"><i class="bi bi-gear"></i> Configurações</h3>
+        <h3 class="text-dark"><i class="bi bi-gear-fill"></i> Configurações</h3>
         <?php if($mensagem): ?><div class="alert alert-success py-1 px-3 m-0"><?php echo $mensagem; ?></div><?php endif; ?>
     </div>
 
@@ -62,7 +79,7 @@ $compradores = $pdo->query("SELECT * FROM compradores ORDER BY nome")->fetchAll(
         <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-empresas">🏢 Empresas</button></li>
         <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-obras">🏗️ Obras</button></li>
         <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-fornecedores">🚛 Fornecedores</button></li>
-        <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-materiais">🧱 Materiais</button></li>
+        <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-clientes">🏠 Clientes (Imob)</button></li> <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-materiais">📦 Materiais</button></li>
         <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-compradores">👤 Compradores</button></li>
     </ul>
 
@@ -137,10 +154,7 @@ $compradores = $pdo->query("SELECT * FROM compradores ORDER BY nome")->fetchAll(
             </div>
             <table class="table table-bordered table-hover table-sm tabela-excel" style="width:100%">
                 <thead>
-                    <tr>
-                        <th>Fornecedor</th>
-                        <th width="150">CNPJ / CPF</th> <th width="50">Editar</th>
-                    </tr>
+                    <tr><th>Fornecedor</th><th width="150">CNPJ / CPF</th><th width="50">Editar</th></tr>
                     <tr class="filters-row"><th></th><th></th><th></th></tr>
                 </thead>
                 <tbody>
@@ -152,8 +166,40 @@ $compradores = $pdo->query("SELECT * FROM compradores ORDER BY nome")->fetchAll(
                             <button class="btn btn-warning btn-sm py-0 btn-editar" 
                                 data-id="<?php echo $f['id']; ?>" 
                                 data-nome="<?php echo $f['nome']; ?>" 
-                                data-cnpj="<?php echo $f['cnpj_cpf']; ?>"
+                                data-doc="<?php echo $f['cnpj_cpf']; ?>"
                                 data-tipo="fornecedores"><i class="bi bi-pencil"></i></button>
+                        </td>
+                    </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="tab-pane fade" id="tab-clientes">
+            <div class="card mb-3 p-2 bg-light">
+                <form method="POST" class="d-flex gap-2">
+                    <input type="hidden" name="acao" value="novo_cliente_imob">
+                    <input type="text" name="nome" class="form-control form-control-sm" placeholder="Nome do Cliente" required>
+                    <input type="text" name="cpf" class="form-control form-control-sm" placeholder="CPF / CNPJ" style="width: 150px;">
+                    <button class="btn btn-dark btn-sm text-white">Adicionar Cliente</button>
+                </form>
+            </div>
+            <table class="table table-bordered table-hover table-sm tabela-excel" style="width:100%">
+                <thead>
+                    <tr><th>Cliente</th><th width="150">CPF / CNPJ</th><th width="50">Editar</th></tr>
+                    <tr class="filters-row"><th></th><th></th><th></th></tr>
+                </thead>
+                <tbody>
+                    <?php foreach($clientes_imob as $c): ?>
+                    <tr>
+                        <td><?php echo $c['nome']; ?></td>
+                        <td><?php echo $c['cpf']; ?></td>
+                        <td class="text-center">
+                            <button class="btn btn-warning btn-sm py-0 btn-editar" 
+                                data-id="<?php echo $c['id']; ?>" 
+                                data-nome="<?php echo $c['nome']; ?>" 
+                                data-doc="<?php echo $c['cpf']; ?>"
+                                data-tipo="clientes_imob"><i class="bi bi-pencil"></i></button>
                         </td>
                     </tr>
                     <?php endforeach; ?>
@@ -239,9 +285,9 @@ $compradores = $pdo->query("SELECT * FROM compradores ORDER BY nome")->fetchAll(
                         <input type="text" name="nome" id="edit_nome" class="form-control" required>
                     </div>
 
-                    <div class="mb-3" id="div_cnpj" style="display:none;">
-                        <label class="form-label fw-bold">CNPJ / CPF:</label>
-                        <input type="text" name="cnpj_cpf" id="edit_cnpj" class="form-control">
+                    <div class="mb-3" id="div_doc" style="display:none;">
+                        <label class="form-label fw-bold">CPF / CNPJ:</label>
+                        <input type="text" name="doc" id="edit_doc" class="form-control">
                     </div>
                 </div>
                 <div class="modal-footer">
@@ -264,8 +310,6 @@ $compradores = $pdo->query("SELECT * FROM compradores ORDER BY nome")->fetchAll(
 
 <script>
 $(document).ready(function() {
-    
-    // 1. DATA TABLES (Filtros e Paginação)
     $('.tabela-excel').DataTable({
         dom: 'Bfrtip',
         pageLength: 25,
@@ -276,7 +320,7 @@ $(document).ready(function() {
             this.api().columns().every(function () {
                 var column = this;
                 var header = $(column.header());
-                if(header.text() === "Editar" || header.text() === "CNPJ / CPF") return; 
+                if(header.text() === "Editar" || header.text().includes("CPF")) return; 
                 
                 var filterRow = header.closest('thead').find('.filters-row th').eq(column.index());
                 var select = $('<select class="filter-select"><option value="">Todos</option></select>')
@@ -293,12 +337,12 @@ $(document).ready(function() {
         }
     });
 
-    // 2. LÓGICA DO BOTÃO EDITAR (PREENCHER MODAL)
+    // --- LÓGICA DO EDITAR ---
     $(document).on('click', '.btn-editar', function() {
         var id = $(this).data('id');
         var nome = $(this).data('nome');
         var codigo = $(this).data('codigo');
-        var cnpj = $(this).data('cnpj');
+        var doc = $(this).data('doc'); // CPF ou CNPJ
         var tipo = $(this).data('tipo');
 
         $('#edit_id').val(id);
@@ -307,34 +351,31 @@ $(document).ready(function() {
 
         // Reset
         $('#div_codigo').hide();
-        $('#div_cnpj').hide();
+        $('#div_doc').hide();
 
         if (tipo === 'empresas' || tipo === 'obras') {
             $('#div_codigo').show();
             $('#edit_codigo').val(codigo);
         } 
         else if (tipo === 'fornecedores') {
-            $('#div_cnpj').show();
-            $('#edit_cnpj').val(cnpj);
+            $('#div_doc').show();
+            $('#edit_doc').val(doc).attr('name', 'cnpj_cpf'); // Nome do campo pro PHP
+        }
+        else if (tipo === 'clientes_imob') {
+            $('#div_doc').show();
+            $('#edit_doc').val(doc).attr('name', 'cpf'); // Nome do campo pro PHP
         }
 
         var modal = new bootstrap.Modal(document.getElementById('modalEditar'));
         modal.show();
     });
 
-    // 3. MEMÓRIA DE ABA (CORREÇÃO DE UX) 🧠
-    // Lê a URL para ver se tem ?tab=algumacoisa
+    // Memória de Aba
     const urlParams = new URLSearchParams(window.location.search);
     const activeTab = urlParams.get('tab');
-
     if (activeTab) {
-        // Procura o botão da aba correspondente (ex: #tab-fornecedores)
         const tabButton = document.querySelector(`button[data-bs-target="#tab-${activeTab}"]`);
-        if (tabButton) {
-            // Usa o Bootstrap para ativar a aba
-            const tabInstance = new bootstrap.Tab(tabButton);
-            tabInstance.show();
-        }
+        if (tabButton) { const tabInstance = new bootstrap.Tab(tabButton); tabInstance.show(); }
     }
 });
 </script>

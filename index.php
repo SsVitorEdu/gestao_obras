@@ -71,6 +71,11 @@ else die("<h1>Erro: Arquivo de conexão (db.php) não encontrado.</h1>");
         <a href="index.php?page=fornecedores" class="<?php echo (isset($_GET['page']) && $_GET['page']=='fornecedores')?'active':''; ?>">
             <i class="bi bi-truck-front-fill"></i> Fornecedores
         </a>
+
+        <a href="index.php?page=clientes" class="<?php echo (isset($_GET['page']) && $_GET['page']=='clientes')?'active':''; ?>">
+            <i class="bi bi-briefcase-fill"></i> Clientes
+        </a>
+
  
         <a href="index.php?page=configuracoes" class="<?php echo (isset($_GET['page']) && $_GET['page']=='configuracoes')?'active':''; ?>">
             <i class="bi bi-gear-fill"></i> Configurações

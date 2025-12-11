@@ -3,7 +3,18 @@
 ini_set('display_errors', 1);
 error_reporting(E_ALL);
 
-// CONSULTA SQL
+// --- 1. LÓGICA DE ORDENAÇÃO ---
+$filtro_ordem = $_GET['ordem'] ?? 'cod_desc'; // Padrão: Código Decrescente
+
+switch ($filtro_ordem) {
+    case 'cod_asc':    $sql_order = "o.codigo ASC"; break;       // Código 1, 2, 3...
+    case 'nome_asc':   $sql_order = "o.nome ASC"; break;         // Nome A-Z
+    case 'itens_desc': $sql_order = "total_itens DESC"; break;   // Obras com mais itens primeiro
+    case 'progresso':  $sql_order = "(itens_concluidos / NULLIF(total_itens, 0)) DESC"; break; // Mais concluídas primeiro
+    default:           $sql_order = "o.codigo DESC";             // Padrão: Código 99, 98...
+}
+
+// CONSULTA SQL (Com Order By Dinâmico)
 $sql = "SELECT 
             o.id, 
             o.codigo, 
@@ -15,7 +26,7 @@ $sql = "SELECT
         LEFT JOIN empresas e ON o.empresa_id = e.id
         LEFT JOIN pedidos p ON p.obra_id = o.id
         GROUP BY o.id
-        ORDER BY o.codigo DESC, o.id DESC";
+        ORDER BY $sql_order, o.id DESC"; // Adicionei a variável de ordem aqui
 
 try {
     $obras = $pdo->query($sql)->fetchAll(PDO::FETCH_ASSOC);
@@ -31,33 +42,44 @@ try {
 
 <div class="card shadow-sm mb-4 border-0">
     <div class="card-body p-3">
-        <div class="row align-items-center">
-            
-            <div class="col-md-3">
-                <h4 class="m-0 text-primary fw-bold"><i class="bi bi-buildings"></i> Projetos</h4>
-                <small class="text-muted" id="contador">Total: <?php echo count($obras); ?></small>
-            </div>
+        <form method="GET" id="formOrdem">
+            <input type="hidden" name="page" value="obras"> <div class="row align-items-center">
+                
+                <div class="col-md-3">
+                    <h4 class="m-0 text-primary fw-bold"><i class="bi bi-buildings"></i> Projetos</h4>
+                    <small class="text-muted" id="contador">Total: <?php echo count($obras); ?></small>
+                </div>
 
-            <div class="col-md-5">
-                <div class="input-group">
-                    <span class="input-group-text bg-white"><i class="bi bi-search"></i></span>
-                    <input type="text" id="filtroInput" class="form-control" placeholder="🔍 Filtrar por Código, Obra ou Empresa...">
+                <div class="col-md-4">
+                    <div class="input-group">
+                        <span class="input-group-text bg-white"><i class="bi bi-search"></i></span>
+                        <input type="text" id="filtroInput" class="form-control" placeholder="Filtrar na tela...">
+                    </div>
+                </div>
+
+                <div class="col-md-2">
+                    <select name="ordem" class="form-select fw-bold text-dark" onchange="document.getElementById('formOrdem').submit()">
+                        <option value="cod_desc" <?php echo ($filtro_ordem == 'cod_desc') ? 'selected' : ''; ?>>▼ Cód. (Recentes)</option>
+                        <option value="cod_asc"  <?php echo ($filtro_ordem == 'cod_asc') ? 'selected' : ''; ?>>▲ Cód. (Antigos)</option>
+                        <option value="nome_asc" <?php echo ($filtro_ordem == 'nome_asc') ? 'selected' : ''; ?>>🔤 Nome (A-Z)</option>
+                        <option value="itens_desc" <?php echo ($filtro_ordem == 'itens_desc') ? 'selected' : ''; ?>>📦 Mais Itens</option>
+                        <option value="progresso" <?php echo ($filtro_ordem == 'progresso') ? 'selected' : ''; ?>>🚀 Mais Concluídas</option>
+                    </select>
+                </div>
+                
+                <div class="col-md-3 text-end d-flex justify-content-end gap-1">
+                    <a href="index.php?page=dashboard_obras" class="btn btn-dark btn-sm fw-bold shadow-sm" title="Dashboard">
+                        <i class="bi bi-bar-chart-fill"></i>
+                    </a>
+                    <a href="index.php?page=carga_obras_simples" class="btn btn-success btn-sm shadow-sm" title="Importar">
+                        <i class="bi bi-file-earmark-spreadsheet"></i>
+                    </a>
+                    <a href="index.php?page=nova_obra" class="btn btn-outline-primary btn-sm shadow-sm">
+                        <i class="bi bi-plus-lg"></i> Novo
+                    </a>
                 </div>
             </div>
-            
-            <div class="col-md-4 text-end d-flex justify-content-end gap-2">
-                <a href="index.php?page=dashboard_obras" class="btn btn-dark btn-sm fw-bold shadow-sm">
-                    <i class="bi bi-bar-chart-fill"></i> Dashboard
-                </a>
-
-                <a href="index.php?page=carga_obras_simples" class="btn btn-success btn-sm shadow-sm">
-                    <i class="bi bi-file-earmark-spreadsheet"></i> Importar
-                </a>
-                <a href="index.php?page=nova_obra" class="btn btn-outline-primary btn-sm shadow-sm">
-                    <i class="bi bi-plus-lg"></i> Novo
-                </a>
-            </div>
-        </div>
+        </form>
     </div>
 </div>
 
@@ -121,27 +143,25 @@ try {
 </div>
 
 <script>
+// Seu script de busca original (Filtragem Visual)
 document.getElementById('filtroInput').addEventListener('keyup', function() {
-    let termo = this.value.toLowerCase(); // O que foi digitado
-    let cards = document.querySelectorAll('.obra-item'); // Todos os cards
+    let termo = this.value.toLowerCase();
+    let cards = document.querySelectorAll('.obra-item');
     let visiveis = 0;
 
     cards.forEach(card => {
-        // Pega o texto escondido que montamos no PHP
         let texto = card.getAttribute('data-busca');
         
         if(texto.includes(termo)) {
-            card.style.display = ''; // Mostra (remove o display:none)
+            card.style.display = ''; 
             visiveis++;
         } else {
-            card.style.display = 'none'; // Esconde
+            card.style.display = 'none'; 
         }
     });
 
-    // Atualiza contador
     document.getElementById('contador').innerText = "Exibindo: " + visiveis;
 
-    // Mostra aviso se não achar nada
     if(visiveis === 0) {
         document.getElementById('semResultados').style.display = 'block';
     } else {

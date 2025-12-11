@@ -5,21 +5,16 @@ error_reporting(E_ALL);
 
 $id_obra = $_GET['id'] ?? 0;
 
-// 1. CABEÇALHO DO PROJETO
 $stmt = $pdo->prepare("SELECT nome, codigo FROM obras WHERE id = ?");
 $stmt->execute([$id_obra]);
 $header = $stmt->fetch(PDO::FETCH_ASSOC);
 if(!$header) die("<div class='alert alert-danger'>Obra não encontrada!</div>");
 
-// --- 2. PREPARAÇÃO DOS DADOS ---
-
-// Listas completas para o Modal
 $lista_fornecedores = $pdo->query("SELECT DISTINCT id, nome FROM fornecedores ORDER BY nome")->fetchAll(PDO::FETCH_ASSOC);
 $lista_empresas = $pdo->query("SELECT DISTINCT id, nome FROM empresas ORDER BY nome")->fetchAll(PDO::FETCH_ASSOC);
 $lista_materiais = $pdo->query("SELECT id, nome FROM materiais ORDER BY nome")->fetchAll(PDO::FETCH_ASSOC);
 $lista_compradores = $pdo->query("SELECT id, nome FROM compradores ORDER BY nome")->fetchAll(PDO::FETCH_ASSOC);
 
-// -- DADOS PARA OS FILTROS --
 $sql_forn_filtro = "SELECT DISTINCT f.id, f.nome FROM pedidos p JOIN fornecedores f ON p.fornecedor_id = f.id WHERE p.obra_id = ? ORDER BY f.nome";
 $stmtForn = $pdo->prepare($sql_forn_filtro);
 $stmtForn->execute([$id_obra]);
@@ -36,7 +31,6 @@ $stmtPag->execute([$id_obra]);
 $lista_pagamentos = $stmtPag->fetchAll(PDO::FETCH_ASSOC);
 
 
-// --- 3. FILTROS E CONSULTA ---
 $where = "WHERE p.obra_id = ?";
 $params = [$id_obra];
 
@@ -63,8 +57,6 @@ $sql_itens = "SELECT p.*,
 $itens = $pdo->prepare($sql_itens);
 $itens->execute($params);
 $lista = $itens->fetchAll(PDO::FETCH_ASSOC);
-
-// Totais
 $total_bruto = 0;
 $total_pago = 0;
 foreach($lista as $l) {
@@ -83,6 +75,8 @@ foreach($lista as $l) {
     .bg-filtros { background-color: #f1f4f9; border-bottom: 1px solid #dce1e6; }
     .label-filtro { font-size: 0.75rem; font-weight: bold; color: #555; margin-bottom: 2px; }
     .btn-action { padding: 2px 6px; font-size: 10px; margin-right: 2px; }
+    /* Ajuste para os botões do DataTables ficarem bonitos */
+    .dt-buttons .btn { margin-right: 5px; font-weight: bold; }
 </style>
 
 <div class="container-fluid px-3 pt-3">
@@ -151,7 +145,13 @@ foreach($lista as $l) {
                     <div class="bg-white border-bottom border-4 border-success px-3 py-1 rounded shadow-sm"><small class="text-muted d-block" style="font-size: 10px;">TOTAL EXECUTADO</small><span class="text-success fw-bold fs-6">R$ <?php echo number_format($total_pago, 2, ',', '.'); ?></span></div>
                 </div>
             </form>
-        </div>
+
+            <hr class="my-2 border-secondary opacity-25">
+            <div class="d-flex align-items-center gap-2">
+                <span class="small fw-bold text-muted"><i class="bi bi-download"></i> Exportar Relatório:</span>
+                <div id="area_botoes"></div>
+            </div>
+            </div>
     </div>
 
     <div class="card shadow">
@@ -308,28 +308,29 @@ foreach($lista as $l) {
 </div>
 
 <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.1.53/pdfmake.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.1.53/vfs_fonts.js"></script>
+
 <script src="https://cdn.datatables.net/1.13.4/js/jquery.dataTables.min.js"></script>
 <script src="https://cdn.datatables.net/1.13.4/js/dataTables.bootstrap5.min.js"></script>
 <script src="https://cdn.datatables.net/buttons/2.3.6/js/dataTables.buttons.min.js"></script>
 <script src="https://cdn.datatables.net/buttons/2.3.6/js/buttons.bootstrap5.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="https://cdn.datatables.net/buttons/2.3.6/js/buttons.html5.min.js"></script>
 <script src="https://cdn.datatables.net/fixedcolumns/4.2.2/js/dataTables.fixedColumns.min.js"></script>
 
 <script>
-// ABRIR NOVO
+// --- FUNÇÕES DE AÇÃO ---
 function novoPedido() {
     $('#formPedido')[0].reset(); 
     $('#pedido_id').val(''); 
-    
     $('#modalTitle').html('<i class="bi bi-plus-circle"></i> Novo Pedido');
     $('#modalHeader').removeClass('bg-warning').addClass('bg-success');
     $('#btnSalvar').text('SALVAR');
-    
     $('#modalNovoPedido').modal('show');
 }
 
-// ABRIR EDIÇÃO
 function editarPedido(dados) {
     $('#pedido_id').val(dados.id);
     $('#numero_of').val(dados.numero_of);
@@ -350,28 +351,68 @@ function editarPedido(dados) {
     $('#modalTitle').html('<i class="bi bi-pencil-square"></i> Editar Pedido #' + dados.id);
     $('#modalHeader').removeClass('bg-success').addClass('bg-warning text-dark');
     $('#btnSalvar').text('ATUALIZAR');
-
     $('#modalNovoPedido').modal('show');
 }
 
-// FUNÇÃO DE EXCLUSÃO
 function excluirPedido(id) {
     if(confirm('Tem certeza que deseja excluir este pedido?')) {
         window.location.href = 'actions/excluir_pedido_obra.php?id=' + id + '&obra_id=<?php echo $id_obra; ?>';
     }
 }
 
+// --- CONFIGURAÇÃO DA TABELA ---
 $(document).ready(function() {
+    var nomeObra = "<?php echo $header['nome']; ?>";
+    var dataHoje = new Date().toLocaleDateString('pt-BR');
+
+    // NUNCA use 'var table =' se for usar a variável dentro do initComplete.
+    // O DataTables gerencia isso internamente com 'this'.
     $('#tabelaDetalhes').DataTable({
         scrollY: '60vh',
         scrollX: true,
         scrollCollapse: true,
         paging: true,
         pageLength: 50,
-        fixedColumns: { left: 2 }, // Fixa Ações e Empresa
-        buttons: [ { extend: 'excel', className: 'btn btn-success btn-sm', text: 'Excel' } ],
-        dom: 'Bfrtip',
-        language: { url: "//cdn.datatables.net/plug-ins/1.13.4/i18n/pt-BR.json" }
+        fixedColumns: { left: 2 },
+        // 'dom' define a estrutura. 'B' cria os botões (invisíveis a princípio se quiser esconder, mas aqui vamos deixar padrão)
+        dom: 'Bfrtip', 
+        buttons: [
+            {
+                extend: 'excelHtml5',
+                text: '<i class="bi bi-file-earmark-excel"></i> Excel',
+                className: 'btn btn-success btn-sm fw-bold',
+                title: 'Relatório - ' + nomeObra + ' - ' + dataHoje,
+                exportOptions: { columns: ':visible:not(:eq(0))' }
+            },
+            {
+                extend: 'pdfHtml5',
+                text: '<i class="bi bi-file-earmark-pdf"></i> PDF',
+                className: 'btn btn-danger btn-sm fw-bold ms-2',
+                orientation: 'landscape',
+                pageSize: 'A4',
+                title: 'Relatório - ' + nomeObra,
+                messageTop: 'Gerado em: ' + dataHoje,
+                exportOptions: { columns: ':visible:not(:eq(0))' },
+                customize: function (doc) {
+                    doc.defaultStyle.fontSize = 7;
+                    doc.styles.tableHeader.fontSize = 8;
+                    try {
+                        var colCount = doc.content[1].table.body[0].length;
+                        doc.content[1].table.widths = Array(colCount).fill('*');
+                    } catch (e) {}
+                }
+            }
+        ],
+        language: { url: "//cdn.datatables.net/plug-ins/1.13.4/i18n/pt-BR.json" },
+        
+        // CORREÇÃO CRÍTICA AQUI:
+        initComplete: function () {
+            // Usamos 'this.api()' porque a variável 'table' ainda não existe nesse momento
+            var api = this.api();
+            
+            // Pega os botões gerados e move fisicamente para a sua DIV personalizada
+            api.buttons().container().appendTo( $('#area_botoes') );
+        }
     });
 });
 </script>

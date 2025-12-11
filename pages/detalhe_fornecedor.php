@@ -1,17 +1,14 @@
 <?php
-// DETALHE DO FORNECEDOR (COM GESTÃO DE CONTRATOS MANUAL)
 ini_set('display_errors', 1);
 error_reporting(E_ALL);
 
 $id_forn = $_GET['id'] ?? 0;
 
-// 1. DADOS
 $stmt = $pdo->prepare("SELECT * FROM fornecedores WHERE id = ?");
 $stmt->execute([$id_forn]);
 $fornecedor = $stmt->fetch(PDO::FETCH_ASSOC);
 if(!$fornecedor) die("Fornecedor não encontrado!");
 
-// 2. CONTRATOS (Lista Atualizada)
 try {
     $stmtContratos = $pdo->prepare("SELECT * FROM contratos WHERE fornecedor_id = ? ORDER BY data_contrato DESC");
     $stmtContratos->execute([$id_forn]);
@@ -21,7 +18,6 @@ try {
 $valor_contrato_total = 0;
 foreach($contratos as $c) { $valor_contrato_total += $c['valor']; }
 
-// 3. FILTROS E PEDIDOS (Mantidos iguais)
 $where = "WHERE p.fornecedor_id = ?";
 $params = [$id_forn];
 
@@ -59,7 +55,6 @@ $pagamentos_filtro = $pdo->query("SELECT DISTINCT forma_pagamento FROM pedidos W
 <link rel="stylesheet" href="https://cdn.datatables.net/fixedcolumns/4.2.2/css/fixedColumns.bootstrap5.min.css">
 
 <style>
-    /* Estilos Preservados */
     .table-xs th, .table-xs td { font-size: 11px; padding: 5px 8px; white-space: nowrap; vertical-align: middle; }
     .col-longa { white-space: normal !important; min-width: 250px; max-width: 400px; font-weight: bold; color: #333; }
     .bg-filtros { background-color: #f8f9fa; border-bottom: 1px solid #dee2e6; }
@@ -135,7 +130,7 @@ $pagamentos_filtro = $pdo->query("SELECT DISTINCT forma_pagamento FROM pedidos W
         </tr>
         <?php endforeach; ?>
     </tbody>
-</table>
+</table> 
             <?php endif; ?>
         </div>
     </div>
@@ -253,14 +248,13 @@ $(document).ready(function() {
     });
 });
 
-// Função para abrir o Modal de Contrato (Novo ou Edição)
 function modalContrato(dados = null) {
     if (dados) {
         $('#tituloModal').text('Editar Contrato');
         $('#ct_id').val(dados.id);
         $('#ct_resp').val(dados.responsavel);
         $('#ct_data').val(dados.data_contrato);
-        $('#ct_valor').val(dados.valor.replace('.', ',')); // Formata visual
+        $('#ct_valor').val(dados.valor.replace('.', ',')); 
     } else {
         $('#tituloModal').text('Novo Contrato');
         $('#ct_id').val('');
