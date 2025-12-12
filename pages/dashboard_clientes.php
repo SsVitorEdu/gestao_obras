@@ -1,321 +1,341 @@
 <?php
-// IMPORTADOR CLIENTES (COM DIAGNÓSTICO DETALHADO DE COLUNAS)
+// DASHBOARD IMOBILIÁRIO (BARRAS LADO A LADO + FILTRO VISUAL)
 ini_set('display_errors', 1);
 error_reporting(E_ALL);
-set_time_limit(600); 
-ini_set('memory_limit', '1024M');
+set_time_limit(300);
 
-$db_path = __DIR__ . '/../includes/db.php';
-if (file_exists($db_path)) include $db_path;
-else include __DIR__ . '/../db.php';
+// --- 1. FILTROS ---
+$where = "WHERE 1=1";
+$params = [];
 
-// --- FUNÇÕES DE LIMPEZA ---
-function limpaValor($v) {
-    if(is_numeric($v)) return (float)$v;
-    if(!isset($v) || trim($v) === '') return 0.00;
-    $v = preg_replace('/[^\d,.-]/', '', $v); 
-    $v = str_replace('.', '', $v); 
-    $v = str_replace(',', '.', $v);
-    return (float)$v;
+// Datas
+$dt_ini = $_GET['dt_ini'] ?? date('Y-01-01');
+$dt_fim = $_GET['dt_fim'] ?? date('Y-12-31');
+
+if (!empty($dt_ini)) { 
+    $where .= " AND (p.data_vencimento >= ? OR p.data_pagamento >= ?)"; 
+    $params[] = $dt_ini; $params[] = $dt_ini;
+}
+if (!empty($dt_fim)) { 
+    $where .= " AND (p.data_vencimento <= ? OR p.data_pagamento <= ?)"; 
+    $params[] = $dt_fim; $params[] = $dt_fim;
 }
 
-function dataSQL($v) {
-    if(empty($v) || $v == '-' || $v == 'NULL') return null;
-    
-    // Excel Serial
-    if(is_numeric($v) && $v > 20000) {
-        $unix_date = ($v - 25569) * 86400;
-        return gmdate("Y-m-d", $unix_date); 
-    }
-    
-    $v = trim($v);
-    if(strpos($v, '/') !== false) { 
-        $p = explode('/', $v); 
-        if(count($p)==3) return "{$p[2]}-{$p[1]}-{$p[0]}"; 
-    }
-    return null; 
+// Filtro Empresa
+$filtro_emp = $_GET['filtro_emp'] ?? '';
+if (!empty($filtro_emp)) {
+    $where .= " AND v.nome_empresa = ?";
+    $params[] = $filtro_emp;
 }
 
-// --- PROCESSAMENTO ---
-if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['json_dados'])) {
-    
-    $dados = json_decode($_POST['json_dados'], true);
-    
-    if (!$dados) {
-        echo json_encode(['status' => 'erro', 'msg' => 'Erro ao decodificar JSON.']);
-        exit;
-    }
-
-    try {
-        $pdo->beginTransaction();
-        $novos_clientes = 0;
-        $novas_vendas = 0;
-        $parcelas_proc = 0;
-
-        $stmtBuscaCli = $pdo->prepare("SELECT id FROM clientes_imob WHERE nome = ? LIMIT 1");
-        $stmtInsCli   = $pdo->prepare("INSERT INTO clientes_imob (nome, cpf) VALUES (?, ?)");
-        
-        $stmtBuscaVenda = $pdo->prepare("SELECT id FROM vendas_imob WHERE codigo_compra = ? LIMIT 1");
-        $stmtInsVenda   = $pdo->prepare("INSERT INTO vendas_imob (cliente_id, codigo_compra, nome_casa, nome_empresa, data_inicio, data_fim, data_contrato, valor_total) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
-        $stmtUpdVenda   = $pdo->prepare("UPDATE vendas_imob SET nome_empresa=?, data_inicio=?, data_fim=?, data_contrato=? WHERE id=?");
-
-        $stmtBuscaParc = $pdo->prepare("SELECT id FROM parcelas_imob WHERE venda_id = ? AND data_vencimento = ? AND ABS(valor_parcela - ?) < 0.1 LIMIT 1");
-        $stmtInsParc   = $pdo->prepare("INSERT INTO parcelas_imob (venda_id, numero_parcela, data_vencimento, valor_parcela, data_pagamento, valor_pago) VALUES (?, ?, ?, ?, ?, ?)");
-        $stmtUpdParc   = $pdo->prepare("UPDATE parcelas_imob SET data_pagamento=?, valor_pago=? WHERE id=?");
-
-        foreach($dados as $d) {
-            $nome_cli = strtoupper(trim($d['cliente']));
-            $cod_cont = trim($d['contrato']); 
-            
-            if(empty($nome_cli) || empty($cod_cont)) continue;
-
-            // 1. CLIENTE
-            $stmtBuscaCli->execute([$nome_cli]);
-            if($row = $stmtBuscaCli->fetch()) {
-                $cli_id = $row['id'];
-            } else {
-                $stmtInsCli->execute([$nome_cli, $d['cpf']]);
-                $cli_id = $pdo->lastInsertId();
-                $novos_clientes++;
-            }
-
-            // 2. VENDA
-            $venda_id = null;
-            $stmtBuscaVenda->execute([$cod_cont]);
-            if($row = $stmtBuscaVenda->fetch()) {
-                $venda_id = $row['id'];
-                $stmtUpdVenda->execute([
-                    $d['empresa'], dataSQL($d['dt_ini']), dataSQL($d['dt_fim']), dataSQL($d['dt_rel']), $venda_id
-                ]);
-            } else {
-                $nome_casa = "CONTRATO " . $cod_cont;
-                $stmtInsVenda->execute([
-                    $cli_id, $cod_cont, $nome_casa, $d['empresa'], 
-                    dataSQL($d['dt_ini']), dataSQL($d['dt_fim']), dataSQL($d['dt_rel']), 0
-                ]);
-                $venda_id = $pdo->lastInsertId();
-                $novas_vendas++;
-            }
-
-            // 3. PARCELA
-            $dt_venc = dataSQL($d['vencimento']);
-            $vlr_orig = limpaValor($d['vlr_orig']);
-            
-            if($dt_venc && $vlr_orig > 0) {
-                $stmtBuscaParc->execute([$venda_id, $dt_venc, $vlr_orig]);
-                
-                $dt_pag = dataSQL($d['dt_pag']);
-                $vlr_pago = limpaValor($d['vlr_pago']);
-
-                if($rowParc = $stmtBuscaParc->fetch()) {
-                    if($vlr_pago > 0 || !empty($dt_pag)) {
-                        $stmtUpdParc->execute([$dt_pag, $vlr_pago, $rowParc['id']]);
-                    }
-                } else {
-                    $stmtInsParc->execute([$venda_id, 0, $dt_venc, $vlr_orig, $dt_pag, $vlr_pago]);
-                }
-                $parcelas_proc++;
-            }
-        }
-        
-        $pdo->query("UPDATE vendas_imob v SET valor_total = (SELECT SUM(valor_parcela) FROM parcelas_imob p WHERE p.venda_id = v.id)");
-        $pdo->commit();
-
-        echo json_encode([
-            'status' => 'sucesso', 
-            'msg' => "<b>Sucesso!</b><br>Clientes: $novos_clientes<br>Contratos: $novas_vendas<br>Parcelas: $parcelas_proc"
-        ]);
-
-    } catch (Exception $e) {
-        if($pdo->inTransaction()) $pdo->rollBack();
-        echo json_encode(['status' => 'erro', 'msg' => $e->getMessage()]);
-    }
-    exit;
+// Filtro de Status (Afeta o WHERE do banco)
+$filtro_status = $_GET['filtro_status'] ?? '';
+if ($filtro_status == 'pago') {
+    $where .= " AND p.valor_pago > 0";
+} elseif ($filtro_status == 'vencido') {
+    $where .= " AND p.data_vencimento < CURDATE() AND p.valor_pago < p.valor_parcela";
+} elseif ($filtro_status == 'aberto') {
+    $where .= " AND p.data_vencimento >= CURDATE() AND p.valor_pago < p.valor_parcela";
 }
+
+// --- 2. CONSULTAS ---
+
+// KPI GERAIS
+$sql_kpi = "SELECT 
+                SUM(p.valor_pago) as total_recebido,
+                SUM(CASE WHEN p.data_vencimento < CURDATE() AND p.valor_pago < p.valor_parcela THEN (p.valor_parcela - p.valor_pago) ELSE 0 END) as total_vencido,
+                SUM(CASE WHEN p.data_vencimento >= CURDATE() AND p.valor_pago < p.valor_parcela THEN (p.valor_parcela - p.valor_pago) ELSE 0 END) as total_a_receber
+            FROM parcelas_imob p
+            JOIN vendas_imob v ON p.venda_id = v.id
+            $where";
+$stmt = $pdo->prepare($sql_kpi);
+$stmt->execute($params);
+$kpi = $stmt->fetch(PDO::FETCH_ASSOC);
+
+$total_recebido = $kpi['total_recebido'] ?? 0;
+$total_vencido = $kpi['total_vencido'] ?? 0;
+$total_a_receber = $kpi['total_a_receber'] ?? 0;
+$total_geral = $total_recebido + $total_vencido + $total_a_receber;
+
+
+// GRÁFICO 1: EVOLUÇÃO MENSAL
+$sql_mes = "SELECT 
+                DATE_FORMAT(p.data_vencimento, '%Y-%m') as mes_ref,
+                DATE_FORMAT(p.data_vencimento, '%m/%Y') as mes_label,
+                SUM(p.valor_pago) as recebido,
+                SUM(CASE WHEN p.valor_pago < p.valor_parcela THEN (p.valor_parcela - p.valor_pago) ELSE 0 END) as pendente
+            FROM parcelas_imob p
+            JOIN vendas_imob v ON p.venda_id = v.id
+            $where
+            GROUP BY mes_ref
+            ORDER BY mes_ref ASC";
+$stmt = $pdo->prepare($sql_mes);
+$stmt->execute($params);
+$dados_mes = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+
+// GRÁFICO 2: POR EMPRESA
+$sql_emp = "SELECT 
+                v.nome_empresa,
+                SUM(p.valor_pago) as recebido,
+                SUM(CASE WHEN p.data_vencimento < CURDATE() AND p.valor_pago < p.valor_parcela THEN (p.valor_parcela - p.valor_pago) ELSE 0 END) as vencido,
+                SUM(CASE WHEN p.data_vencimento >= CURDATE() AND p.valor_pago < p.valor_parcela THEN (p.valor_parcela - p.valor_pago) ELSE 0 END) as a_receber
+            FROM parcelas_imob p
+            JOIN vendas_imob v ON p.venda_id = v.id
+            $where
+            GROUP BY v.nome_empresa
+            ORDER BY recebido DESC";
+$stmt = $pdo->prepare($sql_emp);
+$stmt->execute($params);
+$dados_emp = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+
+// Lista para filtro
+$lista_empresas = $pdo->query("SELECT DISTINCT nome_empresa FROM vendas_imob ORDER BY nome_empresa")->fetchAll();
+
+// JSON Charts
+$json_mes_lbl = json_encode(array_column($dados_mes, 'mes_label'));
+$json_mes_rec = json_encode(array_column($dados_mes, 'recebido'));
+$json_mes_pen = json_encode(array_column($dados_mes, 'pendente'));
+
+$json_emp_lbl = json_encode(array_column($dados_emp, 'nome_empresa'));
+$json_emp_rec = json_encode(array_column($dados_emp, 'recebido'));
+$json_emp_ven = json_encode(array_column($dados_emp, 'vencido'));
+$json_emp_fut = json_encode(array_column($dados_emp, 'a_receber'));
 ?>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
 
-<div class="container mt-4">
+<div class="container-fluid p-4 bg-light">
+    
     <div class="d-flex justify-content-between align-items-center mb-4">
         <div>
-            <h3 class="text-success fw-bold m-0"><i class="bi bi-file-earmark-excel-fill"></i> IMPORTADOR DE CLIENTES</h3>
-            <span class="text-muted">Análise de Colunas e Dados</span>
+            <h3 class="text-dark fw-bold m-0"><i class="bi bi-pie-chart-fill text-success"></i> DASHBOARD FINANCEIRO</h3>
+            <span class="text-muted small">Inteligência de Recebíveis</span>
         </div>
-        <a href="index.php?page=clientes" class="btn btn-outline-dark fw-bold"><i class="bi bi-arrow-left"></i> VOLTAR</a>
+        <div>
+            <button onclick="window.print()" class="btn btn-outline-dark fw-bold me-2"><i class="bi bi-printer"></i> IMPRIMIR</button>
+            <a href="index.php?page=clientes" class="btn btn-dark fw-bold"><i class="bi bi-arrow-left"></i> VOLTAR</a>
+        </div>
     </div>
 
-    <div class="card shadow border-0">
-        <div class="card-body p-5 text-center">
-            
-            <div id="drop_zone" style="border: 3px dashed #198754; padding: 40px; border-radius: 10px; cursor: pointer; background: #f8fff9;">
-                <i class="bi bi-cloud-upload display-1 text-success opacity-50"></i>
-                <h4 class="mt-3">Arraste seu arquivo <b>.XLSX</b> ou <b>.CSV</b> aqui</h4>
-                <p class="text-muted">Certifique-se que o arquivo tem as colunas "TOTAL ORIGINAL", "DATA DE VENCIMENTO" e "CLIENTE".</p>
-                <input type="file" id="fileInput" accept=".xlsx, .xls, .csv" style="display: none;">
-            </div>
-
-            <div id="loading" class="mt-4 text-start" style="display: none;">
-                <div class="d-flex align-items-center mb-2">
-                    <div class="spinner-border spinner-border-sm text-success me-2" role="status"></div>
-                    <span class="fw-bold text-dark">Analisando arquivo...</span>
+    <div class="card shadow-sm mb-4 border-0">
+        <div class="card-body bg-white py-3">
+            <form method="GET" class="row g-3 align-items-end">
+                <input type="hidden" name="page" value="dashboard_clientes">
+                
+                <div class="col-md-2">
+                    <label class="fw-bold small text-muted">Início</label>
+                    <input type="date" name="dt_ini" class="form-control" value="<?php echo $dt_ini; ?>">
                 </div>
-                <div id="col_debug" class="alert alert-secondary small font-monospace p-2" style="max-height: 200px; overflow-y: auto;">
-                    Aguardando análise...
+                <div class="col-md-2">
+                    <label class="fw-bold small text-muted">Fim</label>
+                    <input type="date" name="dt_fim" class="form-control" value="<?php echo $dt_fim; ?>">
+                </div>
+                
+                <div class="col-md-2">
+                    <label class="fw-bold small text-muted">Status</label>
+                    <select name="filtro_status" id="filtro_status" class="form-select">
+                        <option value="">-- Todos --</option>
+                        <option value="pago" <?php echo ($filtro_status=='pago')?'selected':''; ?>>✅ Recebidos</option>
+                        <option value="vencido" <?php echo ($filtro_status=='vencido')?'selected':''; ?>>🔴 Vencidos</option>
+                        <option value="aberto" <?php echo ($filtro_status=='aberto')?'selected':''; ?>>📅 A Receber</option>
+                    </select>
+                </div>
+
+                <div class="col-md-4">
+                    <label class="fw-bold small text-muted">Empresa</label>
+                    <select name="filtro_emp" class="form-select">
+                        <option value="">-- Todas --</option>
+                        <?php foreach($lista_empresas as $e): ?>
+                            <option value="<?php echo $e['nome_empresa']; ?>" <?php echo ($filtro_emp == $e['nome_empresa'])?'selected':''; ?>>
+                                <?php echo mb_strimwidth($e['nome_empresa'], 0, 45, "..."); ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+
+                <div class="col-md-2">
+                    <button class="btn btn-success w-100 fw-bold"><i class="bi bi-funnel-fill"></i> ATUALIZAR</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div class="row mb-4 g-3">
+        <div class="col-md-3">
+            <div class="card shadow-sm border-start border-5 border-success h-100">
+                <div class="card-body">
+                    <small class="text-uppercase fw-bold text-success ls-1">Recebido</small>
+                    <h3 class="fw-bold text-dark mt-1 mb-0">R$ <?php echo number_format($total_recebido, 2, ',', '.'); ?></h3>
                 </div>
             </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card shadow-sm border-start border-5 border-primary h-100">
+                <div class="card-body">
+                    <small class="text-uppercase fw-bold text-primary ls-1">A Receber</small>
+                    <h3 class="fw-bold text-dark mt-1 mb-0">R$ <?php echo number_format($total_a_receber, 2, ',', '.'); ?></h3>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card shadow-sm border-start border-5 border-danger h-100">
+                <div class="card-body">
+                    <small class="text-uppercase fw-bold text-danger ls-1">Vencido</small>
+                    <h3 class="fw-bold text-dark mt-1 mb-0">R$ <?php echo number_format($total_vencido, 2, ',', '.'); ?></h3>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card shadow-sm border-start border-5 border-secondary h-100">
+                <div class="card-body">
+                    <small class="text-uppercase fw-bold text-secondary ls-1">Total (Filtro)</small>
+                    <h3 class="fw-bold text-dark mt-1 mb-0">R$ <?php echo number_format($total_geral, 2, ',', '.'); ?></h3>
+                </div>
+            </div>
+        </div>
+    </div>
 
-            <div id="resultado" class="mt-4"></div>
+    <div class="row g-4">
+        <div class="col-12">
+            <div class="card shadow border-0">
+                <div class="card-header bg-white py-3">
+                    <h5 class="fw-bold text-dark m-0"><i class="bi bi-bar-chart-line"></i> FLUXO MENSAL</h5>
+                </div>
+                <div class="card-body">
+                    <div style="height: 400px;"><canvas id="chartFluxo"></canvas></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-12">
+            <div class="card shadow border-0">
+                <div class="card-header bg-white py-3">
+                    <h5 class="fw-bold text-dark m-0"><i class="bi bi-building"></i> POR EMPRESA</h5>
+                </div>
+                <div class="card-body">
+                    <div style="height: 500px;"><canvas id="chartEmpresa"></canvas></div>
+                </div>
+            </div>
         </div>
     </div>
 </div>
 
 <script>
-const dropZone = document.getElementById('drop_zone');
-const fileInput = document.getElementById('fileInput');
-const colDebug = document.getElementById('col_debug');
+const fmtBRL = (val) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 }).format(val);
+const fmtCompact = (val) => new Intl.NumberFormat('pt-BR', { notation: "compact", compactDisplay: "short", maximumFractionDigits: 1 }).format(val);
 
-dropZone.addEventListener('click', () => fileInput.click());
-dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.style.background = '#e8f5e9'; });
-dropZone.addEventListener('dragleave', () => { dropZone.style.background = '#f8fff9'; });
-dropZone.addEventListener('drop', (e) => {
-    e.preventDefault(); dropZone.style.background = '#f8fff9';
-    if(e.dataTransfer.files.length) processarArquivo(e.dataTransfer.files[0]);
-});
-fileInput.addEventListener('change', (e) => {
-    if(fileInput.files.length) processarArquivo(fileInput.files[0]);
-});
+// VARIÁVEIS PHP PARA JS
+const statusFiltro = "<?php echo $filtro_status; ?>";
 
-function logCol(msg, status='neutral') {
-    let color = status === 'ok' ? 'text-success' : (status === 'error' ? 'text-danger fw-bold' : 'text-muted');
-    let icon = status === 'ok' ? '✅' : (status === 'error' ? '❌' : 'ℹ️');
-    colDebug.innerHTML += `<div class="${color}">${icon} ${msg}</div>`;
-}
+Chart.register(ChartDataLabels);
+Chart.defaults.font.family = "'Segoe UI', sans-serif";
+Chart.defaults.color = '#555';
 
-function processarArquivo(file) {
-    document.getElementById('loading').style.display = 'block';
-    document.getElementById('resultado').innerHTML = '';
-    colDebug.innerHTML = ''; // Limpa log
-
-    const reader = new FileReader();
-    reader.onload = function(e) {
-        const data = new Uint8Array(e.target.result);
-        const workbook = XLSX.read(data, {type: 'array'});
-        const firstSheet = workbook.SheetNames[0];
-        const rows = XLSX.utils.sheet_to_json(workbook.Sheets[firstSheet], {header: 1, defval: ''});
-
-        // 1. LOCALIZAR CABEÇALHO
-        let headerIndex = -1;
-        for(let i=0; i < Math.min(rows.length, 20); i++) {
-            const linha = JSON.stringify(rows[i]).toUpperCase();
-            if(linha.includes("TOTAL ORIGINAL") && linha.includes("CLIENTE")) {
-                headerIndex = i;
-                break;
+// 1. FLUXO MENSAL
+// Lógica de visualização: LADO A LADO (sem stack)
+new Chart(document.getElementById('chartFluxo'), {
+    type: 'bar',
+    data: {
+        labels: <?php echo $json_mes_lbl; ?>,
+        datasets: [
+            {
+                label: 'Recebido',
+                data: <?php echo $json_mes_rec; ?>,
+                backgroundColor: '#198754', // Verde
+                borderRadius: 4,
+                hidden: (statusFiltro === 'vencido' || statusFiltro === 'aberto'), // Esconde se filtrar só pendente
+                order: 1
+            },
+            {
+                label: 'Pendente',
+                data: <?php echo $json_mes_pen; ?>,
+                backgroundColor: '#6c757d', // Cinza Escuro (Melhor contraste)
+                borderRadius: 4,
+                hidden: (statusFiltro === 'pago'), // Esconde se filtrar só pago
+                order: 2
             }
+        ]
+    },
+    options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+            tooltip: { 
+                callbacks: { label: (c) => c.dataset.label + ': ' + fmtBRL(c.raw) },
+                backgroundColor: 'rgba(0,0,0,0.8)',
+                padding: 10
+            },
+            datalabels: {
+                display: (ctx) => ctx.dataset.data[ctx.dataIndex] > 0,
+                formatter: (val) => fmtCompact(val),
+                font: { weight: 'bold' },
+                anchor: 'end',
+                align: 'top',
+                offset: -4
+            },
+            legend: { position: 'top', align: 'end' }
+        },
+        scales: {
+            x: { grid: { display: false } },
+            y: { beginAtZero: true, grid: { borderDash: [5, 5] } }
         }
-
-        if(headerIndex === -1) {
-            logCol("ERRO FATAL: Não encontrei as colunas obrigatórias (TOTAL ORIGINAL e CLIENTE) nas primeiras 20 linhas.", 'error');
-            return;
-        }
-
-        logCol(`Cabeçalho encontrado na linha ${headerIndex+1}. Mapeando colunas...`, 'neutral');
-
-        // 2. MAPEAR COLUNAS (COM OS NOMES NOVOS)
-        const headerRow = rows[headerIndex].map(c => String(c).trim().toUpperCase());
-        const map = {};
-
-        headerRow.forEach((col, idx) => {
-            if(col.includes("DATA INICIO")) map['DT_INI'] = idx;
-            else if(col.includes("DATA FIM")) map['DT_FIM'] = idx;
-            else if(col.includes("DATA RELATORIO")) map['DT_REL'] = idx;
-            else if(col.includes("RAZA") || col.includes("EMPRESA")) map['EMPRESA'] = idx;
-            else if(col.includes("DATA DE VENCIMENTO")) map['VENCIMENTO'] = idx;
-            else if(col.includes("DATA DE RECEBIMENTO")) map['DT_PAG'] = idx;
-            
-            // Novos Nomes
-            else if(col.includes("TOTAL LIQUIDO RECEBIDO")) map['VLR_PAGO'] = idx;
-            else if(col.includes("TOTAL ORIGINAL")) map['VLR_ORIG'] = idx;
-            
-            else if(col.includes("POSRECTO_FORNECEDOR")) map['CONTRATO'] = idx;
-            else if(col === "CLIENTE") map['CLIENTE'] = idx;
-            else if(col.includes("CPF") || col.includes("CNPJ")) map['CPF'] = idx;
-        });
-
-        // Debug visual do mapeamento
-        if(map['VENCIMENTO'] !== undefined) logCol("Coluna VENCIMENTO: OK", 'ok'); else logCol("Coluna VENCIMENTO: NÃO ENCONTRADA", 'error');
-        if(map['VLR_ORIG'] !== undefined) logCol("Coluna TOTAL ORIGINAL: OK", 'ok'); else logCol("Coluna TOTAL ORIGINAL: NÃO ENCONTRADA", 'error');
-        if(map['CLIENTE'] !== undefined) logCol("Coluna CLIENTE: OK", 'ok'); else logCol("Coluna CLIENTE: NÃO ENCONTRADA", 'error');
-
-        if(map['VENCIMENTO'] === undefined || map['VLR_ORIG'] === undefined || map['CLIENTE'] === undefined) {
-            alert("Faltam colunas obrigatórias! Veja o log na tela.");
-            return;
-        }
-
-        // 3. EXTRAIR DADOS
-        const dadosFinais = [];
-        for(let i = headerIndex + 1; i < rows.length; i++) {
-            let r = rows[i];
-            
-            // Validação de linha útil
-            if(!r[map['VLR_ORIG']] || !r[map['CLIENTE']]) continue;
-
-            dadosFinais.push({
-                dt_ini:     excelDateToJS(r[map['DT_INI']]),
-                dt_fim:     excelDateToJS(r[map['DT_FIM']]),
-                dt_rel:     excelDateToJS(r[map['DT_REL']]),
-                empresa:    String(r[map['EMPRESA']] ?? '').trim(),
-                vencimento: excelDateToJS(r[map['VENCIMENTO']]),
-                dt_pag:     excelDateToJS(r[map['DT_PAG']]),
-                vlr_pago:   limparMoeda(r[map['VLR_PAGO']]),
-                vlr_orig:   limparMoeda(r[map['VLR_ORIG']]),
-                contrato:   String(r[map['CONTRATO']] ?? '').trim(),
-                cliente:    String(r[map['CLIENTE']] ?? '').trim(),
-                cpf:        String(r[map['CPF']] ?? '').trim()
-            });
-        }
-
-        logCol(`Extraídos ${dadosFinais.length} registros válidos. Enviando...`, 'neutral');
-        enviarParaPHP(dadosFinais);
-    };
-    reader.readAsArrayBuffer(file);
-}
-
-function enviarParaPHP(dados) {
-    const formData = new FormData();
-    formData.append('json_dados', JSON.stringify(dados));
-
-    fetch('pages/importar_clientes.php', { method: 'POST', body: formData })
-    .then(response => response.json())
-    .then(data => {
-        document.getElementById('loading').style.display = 'none';
-        const resDiv = document.getElementById('resultado');
-        if(data.status === 'sucesso') resDiv.innerHTML = `<div class="alert alert-success fs-5 shadow-sm">${data.msg}</div>`;
-        else resDiv.innerHTML = `<div class="alert alert-danger">Erro: ${data.msg}</div>`;
-    })
-    .catch(error => {
-        document.getElementById('loading').style.display = 'none';
-        alert('Erro de conexão: ' + error);
-    });
-}
-
-function excelDateToJS(serial) {
-    if (!serial) return null;
-    if (typeof serial === 'number') {
-        const date = new Date(Math.round((serial - 25569) * 86400 * 1000) + (12*60*60*1000));
-        return date.toISOString().split('T')[0];
     }
-    if (typeof serial === 'string' && serial.includes('/')) {
-        const parts = serial.split('/');
-        if(parts.length === 3) return `${parts[2]}-${parts[1]}-${parts[0]}`;
-    }
-    return null;
-}
+});
 
-function limparMoeda(v) {
-    if (typeof v === 'number') return v;
-    if (!v) return 0;
-    let s = v.toString().replace(/[^\d,.-]/g, '').replace('.', '').replace(',', '.');
-    return parseFloat(s) || 0;
-}
+// 2. EMPRESA
+new Chart(document.getElementById('chartEmpresa'), {
+    type: 'bar',
+    data: {
+        labels: <?php echo $json_emp_lbl; ?>,
+        datasets: [
+            { 
+                label: 'Recebido', 
+                data: <?php echo $json_emp_rec; ?>, 
+                backgroundColor: '#198754', 
+                barPercentage: 0.7,
+                hidden: (statusFiltro === 'vencido' || statusFiltro === 'aberto') 
+            },
+            { 
+                label: 'Futuro', 
+                data: <?php echo $json_emp_fut; ?>, 
+                backgroundColor: '#0d6efd', 
+                barPercentage: 0.7,
+                hidden: (statusFiltro === 'pago' || statusFiltro === 'vencido') 
+            },
+            { 
+                label: 'Vencido', 
+                data: <?php echo $json_emp_ven; ?>, 
+                backgroundColor: '#dc3545', 
+                barPercentage: 0.7,
+                hidden: (statusFiltro === 'pago' || statusFiltro === 'aberto') 
+            }
+        ]
+    },
+    options: {
+        indexAxis: 'y',
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+            tooltip: { callbacks: { label: (c) => c.dataset.label + ': ' + fmtBRL(c.raw) } },
+            datalabels: {
+                anchor: 'end', align: 'end',
+                formatter: (val) => val > 0 ? fmtCompact(val) : '',
+                font: { size: 11, weight: 'bold' }
+            }
+        },
+        scales: { x: { grid: { borderDash: [2, 2] } } }
+    }
+});
 </script>
+
+<style>
+@media print {
+    .btn, form, a { display: none !important; }
+    .card { border: none !important; box-shadow: none !important; }
+    canvas { max-width: 100% !important; height: auto !important; page-break-inside: avoid; }
+    body { background-color: white !important; }
+}
+</style>
