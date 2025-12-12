@@ -343,5 +343,6 @@ function expandirGrafico(chartId, titulo) {
 </script>
 
 <style>
-@media print { .btn, form, a { display: none !important; } canvas { max-width: 100% !important; height: auto !important; } .card { border: none !important; shadow: none !important; } }
+@media print { .btn, form, a { display: none !important; } canvas { max-width: 100% !important; height: auto !important; } /* Certo */
+.card { border: none !important; box-shadow: none !important; }}
 </style>
