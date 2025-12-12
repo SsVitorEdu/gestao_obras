@@ -1,13 +1,16 @@
 <?php
+// LISTA GERAL (LAYOUT PROFISSIONAL: SCROLL NATIVO + COLUNA FIXA + PDF/EXCEL)
 ini_set('display_errors', 1);
 error_reporting(E_ALL);
 set_time_limit(300); 
 
+// --- 1. FILTROS ---
 $where_pedidos = "WHERE 1=1"; 
 $where_contratos = "WHERE 1=1";
 $params_pedidos = [];
 $params_contratos = [];
 
+// Filtro Data
 if (!empty($_GET['dt_ini'])) { 
     $where_pedidos .= " AND p.data_pedido >= ?"; 
     $params_pedidos[] = $_GET['dt_ini']; 
@@ -17,6 +20,7 @@ if (!empty($_GET['dt_fim'])) {
     $params_pedidos[] = $_GET['dt_fim']; 
 }
 
+// Filtro Fornecedor
 if (!empty($_GET['filtro_forn'])) { 
     $where_pedidos .= " AND p.fornecedor_id = ?"; 
     $params_pedidos[] = $_GET['filtro_forn'];
@@ -25,31 +29,49 @@ if (!empty($_GET['filtro_forn'])) {
     $params_contratos[] = $_GET['filtro_forn'];
 }
 
+// Filtro Obra
 if (!empty($_GET['filtro_obra'])) { 
     $where_pedidos .= " AND p.obra_id = ?"; 
     $params_pedidos[] = $_GET['filtro_obra']; 
 }
 
+// Filtro Forma de Pagamento
 if (!empty($_GET['filtro_pag'])) { 
     $where_pedidos .= " AND p.forma_pagamento = ?"; 
     $params_pedidos[] = $_GET['filtro_pag']; 
 }
 
+// Filtro OF
 if (!empty($_GET['filtro_of'])) { 
     $where_pedidos .= " AND p.numero_of LIKE ?"; 
     $params_pedidos[] = "%" . $_GET['filtro_of'] . "%"; 
 }
 
+// =========================================================================
+// CÁLCULOS GLOBAIS
+// =========================================================================
+
+// A. SOMA CONTRATOS
 $sql_soma_contratos = "SELECT SUM(valor) FROM contratos c $where_contratos";
 $stmt = $pdo->prepare($sql_soma_contratos);
 $stmt->execute($params_contratos);
 $valor_contrato_total = $stmt->fetchColumn() ?: 0;
+
+// B. SOMA PEDIDOS
 $sql_soma_pedidos = "SELECT SUM(valor_bruto_pedido) FROM pedidos p $where_pedidos";
 $stmt = $pdo->prepare($sql_soma_pedidos);
 $stmt->execute($params_pedidos);
 $consumo_acumulado = $stmt->fetchColumn() ?: 0;
+
+// C. SALDO
 $saldo_geral = $valor_contrato_total - $consumo_acumulado;
 
+
+// =========================================================================
+// BUSCA DE DADOS
+// =========================================================================
+
+// Contratos (Lista para o card retrátil)
 $sql_lista_contratos = "SELECT c.*, f.nome as nome_fornecedor 
                         FROM contratos c 
                         LEFT JOIN fornecedores f ON c.fornecedor_id = f.id 
@@ -59,6 +81,7 @@ $stmt = $pdo->prepare($sql_lista_contratos);
 $stmt->execute($params_contratos);
 $contratos = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
+// Pedidos (Lista Principal)
 $sql_lista_pedidos = "SELECT p.*, 
                         o.nome as nome_obra, 
                         o.codigo as cod_obra, 
@@ -78,6 +101,7 @@ $stmt = $pdo->prepare($sql_lista_pedidos);
 $stmt->execute($params_pedidos);
 $lista_pedidos = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
+// Dropdowns
 $obras_filtro = $pdo->query("SELECT id, nome FROM obras ORDER BY nome")->fetchAll();
 $forn_filtro = $pdo->query("SELECT id, nome FROM fornecedores ORDER BY nome")->fetchAll();
 $pag_filtro = $pdo->query("SELECT DISTINCT forma_pagamento FROM pedidos WHERE forma_pagamento != '' ORDER BY forma_pagamento")->fetchAll();
@@ -88,6 +112,7 @@ $pag_filtro = $pdo->query("SELECT DISTINCT forma_pagamento FROM pedidos WHERE fo
 <link rel="stylesheet" href="https://cdn.datatables.net/fixedcolumns/4.2.2/css/fixedColumns.bootstrap5.min.css">
 
 <style>
+    /* Estilo Compacto Profissional */
     .table-xs th, .table-xs td { 
         font-size: 11px; 
         padding: 5px 8px; 
@@ -95,6 +120,7 @@ $pag_filtro = $pdo->query("SELECT DISTINCT forma_pagamento FROM pedidos WHERE fo
         vertical-align: middle; 
     }
     
+    /* Colunas Inteligentes (Texto Longo) */
     .col-longa { 
         white-space: normal !important; 
         min-width: 250px; 
@@ -105,13 +131,20 @@ $pag_filtro = $pdo->query("SELECT DISTINCT forma_pagamento FROM pedidos WHERE fo
         white-space: normal !important;
         min-width: 150px;
         max-width: 250px;
+        font-weight: bold;
+        color: #444;
     }
 
+    /* Área de Filtros */
     .bg-filtros { background-color: #f8f9fa; border-bottom: 1px solid #dee2e6; }
     .label-filtro { font-size: 0.75rem; font-weight: bold; color: #666; margin-bottom: 2px; }
+    
+    /* Totais */
     .card-total-sm { padding: 10px; border-left: 4px solid #ccc; background: #fff; }
     .card-total-sm h5 { font-size: 1.1rem; margin: 0; font-weight: bold; }
     .card-total-sm small { font-size: 0.7rem; text-transform: uppercase; color: #888; font-weight: bold; }
+    
+    /* Contratos */
     .card-contratos { border-left: 4px solid #0d6efd; background-color: #f0f7ff; }
 </style>
 
@@ -190,7 +223,7 @@ $pag_filtro = $pdo->query("SELECT DISTINCT forma_pagamento FROM pedidos WHERE fo
                 <div class="col-md-2">
                     <label class="label-filtro">Pagamento</label>
                     <select name="filtro_pag" class="form-select form-select-sm">
-                        <option value="">-- Todas --</option>
+                        <option value="">-- Todos --</option>
                         <?php foreach($pag_filtro as $pg): ?>
                             <option value="<?php echo $pg['forma_pagamento']; ?>" <?php echo (isset($_GET['filtro_pag']) && $_GET['filtro_pag'] == $pg['forma_pagamento']) ? 'selected' : ''; ?>>
                                 <?php echo $pg['forma_pagamento']; ?>
@@ -304,6 +337,10 @@ $pag_filtro = $pdo->query("SELECT DISTINCT forma_pagamento FROM pedidos WHERE fo
 <script src="https://cdn.datatables.net/buttons/2.3.6/js/buttons.bootstrap5.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="https://cdn.datatables.net/buttons/2.3.6/js/buttons.html5.min.js"></script>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.1.53/pdfmake.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.1.53/vfs_fonts.js"></script>
+
 <script src="https://cdn.datatables.net/fixedcolumns/4.2.2/js/dataTables.fixedColumns.min.js"></script>
 
 <script>
@@ -311,18 +348,35 @@ $(document).ready(function() {
     $('#btnToggleContratos').click(function() { $('#areaContratos').slideToggle(); });
 
     $('#tabelaDetalhes').DataTable({
-        scrollY: '60vh',      
-        scrollX: true,        
-        scrollCollapse: true, 
+        scrollY: '60vh',      // Altura da tabela ajustável (60% da tela)
+        scrollX: true,        // Barra de rolagem horizontal
+        scrollCollapse: true, // Encolhe se tiver pouco registro
         paging: true,
-        pageLength: 100,      
+        pageLength: 100,      // Mostra mais registros por padrão na lista geral
+        
+        // A MÁGICA DA COLUNA FIXA
         fixedColumns: {
-            left: 1 
+            left: 1 // A primeira coluna (OBRA) fica parada
         },
         
-        buttons: [ { extend: 'excel', className: 'btn btn-success btn-sm', text: 'Baixar Excel' } ],
+        buttons: [ 
+            { 
+                extend: 'excel', 
+                text: '<i class="bi bi-file-earmark-excel"></i> Excel', 
+                className: 'btn btn-success btn-sm me-1',
+                title: 'Relatorio_Geral_Pedidos'
+            },
+            { 
+                extend: 'pdfHtml5', 
+                text: '<i class="bi bi-file-earmark-pdf"></i> PDF', 
+                className: 'btn btn-danger btn-sm',
+                title: 'Relatorio_Geral_Pedidos',
+                orientation: 'landscape', // Folha deitada
+                pageSize: 'A4'
+            }
+        ],
         dom: 'Bfrtip',
         language: { url: "//cdn.datatables.net/plug-ins/1.13.4/i18n/pt-BR.json" }
     });
 });
-</script> 
+</script>
